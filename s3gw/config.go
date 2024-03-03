@@ -14,6 +14,11 @@ type Backends struct {
 	mu sync.RWMutex
 }
 
+type BackendDef struct {
+	MinioClient *minio.Client
+	Name        string
+}
+
 func (b *Backends) Locate(id string) (*minio.Client, string) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -26,4 +31,18 @@ func (b *Backends) Locate(id string) (*minio.Client, string) {
 	}
 
 	return client, backendID
+}
+
+func (b *Backends) GetMembers() []BackendDef {
+	members := b.ch.GetMembers()
+	out := make([]BackendDef, 0, len(members))
+
+	for _, el := range members {
+		out = append(out, BackendDef{
+			Name:        el.String(),
+			MinioClient: b.backends[el.String()],
+		})
+	}
+
+	return out
 }

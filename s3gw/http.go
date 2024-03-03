@@ -1,10 +1,13 @@
 package s3gw
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"strings"
+	"sync"
 
 	"github.com/minio/minio-go/v7"
 )
@@ -190,4 +193,70 @@ func HandleObjectGet(w http.ResponseWriter, r *http.Request, backends *Backends,
 	}
 
 	log.Printf("Object %q fetched from %q", id, backendContainerID)
+}
+
+func HandleObjectList(w http.ResponseWriter, r *http.Request, backends *Backends, bucketName string) {
+	backendDefs := backends.GetMembers()
+	if len(backendDefs) == 0 {
+		http.Error(w,
+			"Failed to list S3 backend IDs",
+			http.StatusInternalServerError,
+		)
+
+		return
+	}
+
+	var wg sync.WaitGroup
+
+	ctx := r.Context()
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+
+	for _, bDef := range backendDefs {
+		wg.Add(1)
+
+		worker(ctx, &wg, w, r, bDef, bucketName)
+	}
+
+	wg.Wait()
+	log.Printf("Fetched all keys")
+}
+
+func worker(ctx context.Context, wg *sync.WaitGroup, w http.ResponseWriter, r *http.Request, bDef BackendDef, bucketName string) {
+	defer wg.Done()
+
+	exists, err := bDef.MinioClient.BucketExists(ctx, bucketName)
+	if err != nil {
+		http.Error(w,
+			fmt.Sprintf("Failed to check S3 bucket %q existance on %q",
+				bucketName, bDef.Name),
+			http.StatusInternalServerError,
+		)
+
+		return
+	}
+
+	if !exists {
+		http.Error(w,
+			fmt.Sprintf("Bucket %q not found on %q",
+				bucketName, bDef.Name),
+			http.StatusNotFound,
+		)
+
+		return
+	}
+
+	keys, err := ListObjectsInBucket(ctx, bDef.MinioClient, bucketName)
+	if err != nil {
+		http.Error(w,
+			fmt.Sprintf("Failed to list keys in S3 backend on %q", bDef.Name),
+			http.StatusInternalServerError,
+		)
+
+		return
+	}
+
+	w.Write([]byte(strings.Join(keys, " ")))
+
+	log.Printf("Processing keys from %q", bDef.Name)
 }

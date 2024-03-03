@@ -41,3 +41,18 @@ func EnsureBucketExists(ctx context.Context, client *minio.Client, bucketName st
 
 	return client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
 }
+
+func ListObjectsInBucket(ctx context.Context, client *minio.Client, bucketName string) ([]string, error) {
+	out := make([]string, 0)
+
+	objectCh := client.ListObjects(ctx, bucketName, minio.ListObjectsOptions{})
+	for object := range objectCh {
+		if object.Err != nil {
+			return nil, object.Err
+		}
+
+		out = append(out, object.Key)
+	}
+
+	return out, nil
+}

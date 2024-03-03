@@ -44,6 +44,10 @@ func main() {
 		s3gw.HandleObjectGet(w, r, backends, defaultBuckerName)
 	}).Methods(http.MethodGet)
 
+	r.HandleFunc("/object", func(w http.ResponseWriter, r *http.Request) {
+		s3gw.HandleObjectList(w, r, backends, defaultBuckerName)
+	}).Methods(http.MethodGet)
+
 	err = http.ListenAndServe(":3000", r)
 	if err != nil {
 		log.Fatalf("Failed to start S3 Gateway service: %v", err)
