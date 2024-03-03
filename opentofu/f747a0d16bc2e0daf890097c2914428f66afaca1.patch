@@ -1,0 +1,181 @@
+From f747a0d16bc2e0daf890097c2914428f66afaca1 Mon Sep 17 00:00:00 2001
+From: s3rj1k <evasive.gyron@gmail.com>
+Date: Sun, 28 Jan 2024 23:32:47 +0100
+Subject: [PATCH] Implement `flipsensitive`.
+
+---
+ internal/lang/funcs/descriptions.go        |  4 ++
+ internal/lang/funcs/flip_sensitive.go      | 40 +++++++++++++
+ internal/lang/funcs/flip_sensitive_test.go | 65 ++++++++++++++++++++++
+ internal/lang/functions.go                 |  1 +
+ internal/lang/functions_test.go            | 11 ++++
+ 5 files changed, 121 insertions(+)
+ create mode 100644 internal/lang/funcs/flip_sensitive.go
+ create mode 100644 internal/lang/funcs/flip_sensitive_test.go
+
+diff --git a/internal/lang/funcs/descriptions.go b/internal/lang/funcs/descriptions.go
+index 7e25c459f0..6c65fe4093 100644
+--- a/internal/lang/funcs/descriptions.go
++++ b/internal/lang/funcs/descriptions.go
+@@ -355,6 +355,10 @@ var DescriptionList = map[string]descriptionEntry{
+ 		Description:      "`sensitive` takes any value and returns a copy of it marked so that OpenTofu will treat it as sensitive, with the same meaning and behavior as for [sensitive input variables](/language/values/variables#suppressing-values-in-cli-output).",
+ 		ParamDescription: []string{""},
+ 	},
++	"flipsensitive": {
++		Description:      "`flipsensitive` takes any value and returns a value with flipped sensitivity mark.",
++		ParamDescription: []string{""},
++	},
+ 	"setintersection": {
+ 		Description:      "The `setintersection` function takes multiple sets and produces a single set containing only the elements that all of the given sets have in common. In other words, it computes the [intersection](https://en.wikipedia.org/wiki/Intersection_\\(set_theory\\)) of the sets.",
+ 		ParamDescription: []string{"", ""},
+diff --git a/internal/lang/funcs/flip_sensitive.go b/internal/lang/funcs/flip_sensitive.go
+new file mode 100644
+index 0000000000..5b98924311
+--- /dev/null
++++ b/internal/lang/funcs/flip_sensitive.go
+@@ -0,0 +1,40 @@
++package funcs
++
++import (
++	"github.com/opentofu/opentofu/internal/lang/marks"
++	"github.com/zclconf/go-cty/cty"
++	"github.com/zclconf/go-cty/cty/function"
++)
++
++// FlipSensitiveFunc returns a value with flipped sensitivity mark
++var FlipSensitiveFunc = function.New(&function.Spec{
++	Params: []function.Parameter{
++		{
++			Name:             "value",
++			Type:             cty.DynamicPseudoType,
++			AllowUnknown:     true,
++			AllowNull:        true,
++			AllowMarked:      true,
++			AllowDynamicType: true,
++		},
++	},
++	Type: func(args []cty.Value) (cty.Type, error) {
++		// This function only affects the value's marks, so the result
++		// type is always the same as the argument type.
++		return args[0].Type(), nil
++	},
++	Impl: func(args []cty.Value, retType cty.Type) (ret cty.Value, err error) {
++		v, m := args[0].Unmark()
++
++		if marks.Contains(args[0], marks.Sensitive) {
++			delete(m, marks.Sensitive) // remove the sensitive marking
++			return v.WithMarks(m), nil
++		} else {
++			return v.Mark(marks.Sensitive), nil
++		}
++	},
++})
++
++func FlipSensitive(v cty.Value) (cty.Value, error) {
++	return FlipSensitiveFunc.Call([]cty.Value{v})
++}
+diff --git a/internal/lang/funcs/flip_sensitive_test.go b/internal/lang/funcs/flip_sensitive_test.go
+new file mode 100644
+index 0000000000..90afbd69e8
+--- /dev/null
++++ b/internal/lang/funcs/flip_sensitive_test.go
+@@ -0,0 +1,65 @@
++package funcs
++
++import (
++	"fmt"
++	"testing"
++
++	"github.com/opentofu/opentofu/internal/lang/marks"
++	"github.com/zclconf/go-cty/cty"
++)
++
++func TestFlipSensitive(t *testing.T) {
++	tests := []struct {
++		Input         cty.Value
++		WantSensitive bool
++	}{
++		{
++			cty.NumberIntVal(1).Mark(marks.Sensitive),
++			false,
++		},
++		{
++			cty.DynamicVal.Mark(marks.Sensitive),
++			false,
++		},
++		{
++			cty.UnknownVal(cty.String).Mark(marks.Sensitive),
++			false,
++		},
++		{
++			cty.NullVal(cty.EmptyObject).Mark(marks.Sensitive),
++			false,
++		},
++		{
++			cty.NumberIntVal(1),
++			true,
++		},
++		{
++			cty.UnknownVal(cty.String),
++			true,
++		},
++		{
++			cty.NullVal(cty.String),
++			true,
++		},
++		{
++			cty.DynamicVal,
++			true,
++		},
++	}
++
++	for _, test := range tests {
++		t.Run(fmt.Sprintf("flipsensitive(%#v)", test.Input), func(t *testing.T) {
++			got, err := FlipSensitive(test.Input)
++			if err != nil {
++				t.Fatalf("unexpected error: %v", err)
++			}
++
++			isSensitive := got.HasMark(marks.Sensitive)
++
++			if isSensitive != test.WantSensitive {
++				t.Errorf("result has unexpected sensitivity mark, want: %t, got: %t",
++					test.WantSensitive, isSensitive)
++			}
++		})
++	}
++}
+diff --git a/internal/lang/functions.go b/internal/lang/functions.go
+index 2e9b57eff6..3dd8db020c 100644
+--- a/internal/lang/functions.go
++++ b/internal/lang/functions.go
+@@ -110,6 +110,7 @@ func (s *Scope) Functions() map[string]function.Function {
+ 			"rsadecrypt":       funcs.RsaDecryptFunc,
+ 			"sensitive":        funcs.SensitiveFunc,
+ 			"nonsensitive":     funcs.NonsensitiveFunc,
++			"flipsensitive":    funcs.FlipSensitiveFunc,
+ 			"setintersection":  stdlib.SetIntersectionFunc,
+ 			"setproduct":       stdlib.SetProductFunc,
+ 			"setsubtract":      stdlib.SetSubtractFunc,
+diff --git a/internal/lang/functions_test.go b/internal/lang/functions_test.go
+index 34bc7dda01..e5908490e3 100644
+--- a/internal/lang/functions_test.go
++++ b/internal/lang/functions_test.go
+@@ -1199,6 +1199,17 @@ func TestFunctions(t *testing.T) {
+ 				}),
+ 			},
+ 		},
++
++		"flipsensitive": {
++			{
++				`flipsensitive(sensitive(1))`,
++				cty.NumberIntVal(1),
++			},
++			{
++				`flipsensitive(nonsensitive(sensitive(1)))`,
++				cty.NumberIntVal(1).Mark(marks.Sensitive),
++			},
++		},
+ 	}
+ 
+ 	experimentalFuncs := map[string]experiments.Experiment{}
